@@ -49,3 +49,21 @@ async def test_v0_tiny_checkpoint_no_tool_calls(tmp_path):
     assert decision.calls == []
     assert decision.raw == []
     assert brain.status == "loaded"
+
+
+def test_v0_is_default_and_legacy_config_migrates(tmp_path):
+    import json
+    config = Config.load(tmp_path)
+    assert config.provider == "june_v0"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "provider": "gemini",
+        "gemini_model": "gemini-2.5-flash",
+        "provider_min_interval": 1.0,
+    }), encoding="utf-8")
+    migrated = Config.load(tmp_path)
+    assert migrated.provider == "june_v0"
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    assert data["provider"] == "june_v0"
+    assert "gemini_model" not in data
+    assert "provider_min_interval" not in data
