@@ -1,0 +1,55 @@
+const graphColors={PROJECT:'#86e4c8',MEMORY:'#a49dff',TASK:'#eac17e',PERSON:'#ea9dbf',IDEA:'#72c8ef',DECISION:'#ceacfa',FILE:'#98b3c7',EVENT:'#cfab82',KNOWLEDGE:'#9ed1a6',NOTE:'#bec5d0'};
+const operationalStates=['UNDERSTANDING','RETRIEVING MEMORY','PLANNING','WAITING FOR PERMISSION','RUNNING TOOL','OBSERVING','VERIFYING','COMPLETE'];
+async function renderBrain(content){
+  const data=await api('brain');if(tab!=='brain')return;
+  let host=content.querySelector('.brain-view');
+  if(!host){
+    content.replaceChildren();host=el('div',undefined,'brain-view');content.append(host);
+    const banner=el('section',undefined,'brain-banner');banner.append(el('div','JUNE BRAIN','eyebrow'),el('h2','Your intelligence, connected.'),el('p','June-owned systems · Live operational view'));
+    banner.append(el('div',undefined,'brain-connection'));host.append(banner);
+    const flow=el('div',undefined,'state-flow');for(const state of operationalStates){const step=el('span',state);step.dataset.phase=state;flow.append(step)}host.append(flow);
+    const meters=el('div',undefined,'brain-meters');for(const [key,label]of [['state','Presence'],['project','Current project'],['latency','Last inference'],['ram','June memory']]){const card=el('div',undefined,'metric');card.append(el('small',label));const val=el('strong','—');val.dataset.metric=key;card.append(val);meters.append(card)}host.append(meters);
+    const panel=el('section',undefined,'graph-panel');panel.append(el('div','MEMORY CONSTELLATION','eyebrow'),el('h3','A map of what June knows'),el('p','Local records and explicit relationships. Layout motion is decorative; these are not model neurons.'));
+    host.append(panel);host.graph=new MemoryGraph(panel);
+    const details=el('div',undefined,'brain-details');host.append(details);
+    for(const [key,title]of [['context','Working context'],['retrieval','Retrieved memories'],['tools','Tools and current work'],['events','Recent events'],['calls','Provider calls'],['resources','Resources'],['future','Neural Explorer contract']]){
+      const block=el('details',undefined,'card');if(key==='context')block.open=true;block.append(el('summary',title));const body=el('pre');body.dataset.brainDetail=key;block.append(body);details.append(block);
+    }
+  }
+  const p=data.presence,op=data.operations;
+  host.querySelector('.brain-connection').textContent=data.model.provider+' / '+data.model.model+' · '+data.model.location+' · Model internals unavailable · '+p.brain_status;
+  for(const step of host.querySelectorAll('[data-phase]'))step.classList.toggle('active',step.dataset.phase===op.agent_state);
+  const last=op.recent_provider_calls[0];
+  for(const [key,value]of Object.entries({state:p.state,project:p.current_project?.name||'Not established',latency:last?last.latency_ms+' ms':'No calls yet',ram:op.resources.june_ram_mb+' MB'}))host.querySelector(`[data-metric="${key}"]`).textContent=value;
+  const blocks={context:{conversation:op.conversation,project:p.current_project,plan:op.current_plan,voice:p.voice_state,microphone:p.microphone_state,screen:p.screen_state,working_memory:op.working_memory},retrieval:op.recent_retrieval,tools:{active:op.active_tools,job:p.current_task,jobs:op.jobs.slice(0,8),recent:op.recent_tools},events:{dispatch:op.event_queue,pending:op.pending_events,events:op.events},calls:op.recent_provider_calls,resources:op.resources,future:{provider:data.model.provider,supports_internal_inspection:false,available:'June-owned operational state',unavailable:['architecture','layers','parameters','tensors','tokenization','logits','probabilities','attention maps','activations','training','gradients'],future:'A genuine LocalJuneBrain telemetry adapter must supply real values before hierarchical model/layer/component/tensor views are enabled.'}};
+  for(const [key,value]of Object.entries(blocks))host.querySelector(`[data-brain-detail="${key}"]`).textContent=JSON.stringify(value,null,2);
+  await host.graph.refresh();
+}
+
+class MemoryGraph{
+  constructor(host){
+    this.host=host;this.nodes=[];this.edges=[];this.selected=null;this.scale=1;this.offset={x:0,y:0};this.lastFetch=0;this.energy=0;
+    const controls=el('div',undefined,'graph-controls');this.search=el('input');this.search.placeholder='Search projects, memories, tasks…';this.search.setAttribute('aria-label','Search memory graph');this.search.oninput=()=>this.filter();
+    this.category=el('select');this.category.setAttribute('aria-label','Filter graph category');for(const value of ['ALL',...Object.keys(graphColors)]){const option=el('option',value);option.value=value;this.category.append(option)}this.category.onchange=()=>this.filter();
+    controls.append(this.search,this.category,button('−',()=>this.zoom(.8)),button('+',()=>this.zoom(1.25)),button('Reset view',()=>{this.scale=1;this.offset={x:0,y:0};this.transform()}));host.append(controls);
+    const area=el('div',undefined,'graph-area');this.svg=this.make('svg',{viewBox:'0 0 1000 400',role:'img','aria-label':'Interactive local memory graph'});this.world=this.make('g');this.lines=this.make('g');this.dots=this.make('g');this.world.append(this.lines,this.dots);this.svg.append(this.world);area.append(this.svg);host.append(area);
+    this.detail=el('div','Select a node to inspect its source and trace its connections.','node-detail');host.append(this.detail);
+    const legend=el('div',undefined,'graph-legend');for(const kind of Object.keys(graphColors)){const item=el('span',kind);item.style.color=graphColors[kind];legend.append(item)}host.append(legend);
+    this.svg.onwheel=e=>{e.preventDefault();this.zoom(e.deltaY<0?1.12:.89)};
+    this.svg.onpointerdown=e=>{if(e.target===this.svg){this.pan={x:e.clientX,y:e.clientY,ox:this.offset.x,oy:this.offset.y};this.svg.setPointerCapture(e.pointerId)}};
+    this.svg.onpointermove=e=>{const ratio=1/this.svg.getScreenCTM().a;if(this.pan){this.offset={x:this.pan.ox+(e.clientX-this.pan.x)*ratio,y:this.pan.oy+(e.clientY-this.pan.y)*ratio};this.transform()}if(this.drag){const point=new DOMPoint(e.clientX,e.clientY).matrixTransform(this.world.getScreenCTM().inverse());this.drag.x=point.x;this.drag.y=point.y;this.drag.vx=this.drag.vy=0;this.paint()}};
+    this.svg.onpointerup=()=>{this.pan=null;this.drag=null};this.svg.onpointercancel=this.svg.onpointerup;
+    this.animate();
+  }
+  make(tag,attrs={}){const node=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const[k,v]of Object.entries(attrs))node.setAttribute(k,v);return node}
+  async refresh(){if(Date.now()-this.lastFetch<10000)return;this.lastFetch=Date.now();const data=await api('graph');if(!this.host.isConnected)return;const signature=JSON.stringify(data.nodes.map(n=>[n.id,n.label,n.details]))+JSON.stringify(data.edges);if(signature===this.signature)return;this.signature=signature;const previous=new Map(this.nodes.map(n=>[n.id,n]));this.nodes=data.nodes.map((n,i)=>({...n,x:previous.get(n.id)?.x??500+Math.cos(i*2.399)*Math.sqrt(i+1)*52,y:previous.get(n.id)?.y??200+Math.sin(i*2.399)*Math.sqrt(i+1)*32,vx:0,vy:0}));this.edges=data.edges;this.energy=160;this.filter()}
+  filter(){const q=this.search.value.toLowerCase();for(const n of this.nodes)n.visible=(!q||(n.label+' '+n.kind).toLowerCase().includes(q))&&(this.category.value==='ALL'||n.kind===this.category.value);this.build();if(this.selected&&this.nodes.some(n=>n.id===this.selected&&n.visible))this.select(this.selected);else{this.selected=null;this.detail.textContent=this.nodes.some(n=>n.visible)?'Select a node to inspect its source and trace its connections.':'No matching records. Save a memory or register a project to grow this map.'}}
+  build(){this.lines.replaceChildren();this.dots.replaceChildren();const visible=new Set(this.nodes.filter(n=>n.visible).map(n=>n.id));this.edgeElements=[];for(const edge of this.edges){if(visible.has(edge.source)&&visible.has(edge.target)){const line=this.make('line',{stroke:'#36545f','stroke-width':1});this.lines.append(line);this.edgeElements.push({edge,line})}}
+    for(const n of this.nodes){if(!n.visible)continue;const g=this.make('g',{tabindex:0,role:'button','aria-label':n.kind+': '+n.label,'data-node-id':n.id});const circle=this.make('circle',{r:n.kind==='PROJECT'?16:9,fill:graphColors[n.kind]||'#a2ddc9','fill-opacity':.8,stroke:'#d5ede9','stroke-width':.6});const label=this.make('text',{x:17,y:4,fill:'#c7d9e1','font-size':16});label.textContent=n.label.slice(0,32);label.style.display=n.kind==='PROJECT'||this.search.value?'':'none';g.append(circle,label);g.onclick=e=>{e.stopPropagation();this.select(n.id)};g.onkeydown=e=>{if(e.key==='Enter')this.select(n.id)};g.onpointerdown=e=>{e.stopPropagation();this.select(n.id);this.drag=n;this.svg.setPointerCapture(e.pointerId)};this.dots.append(g);n.element=g;}this.paint();if(!visible.size)this.detail.textContent='No matching records. Save a memory or register a project to grow this map.';
+  }
+  select(id){const node=this.nodes.find(n=>n.id===id);if(!node)return;this.selected=id;const connections=this.edges.filter(e=>e.source===id||e.target===id);const neighbors=new Set([id,...connections.flatMap(e=>[e.source,e.target])]);for(const n of this.nodes){if(n.element&&n.visible){n.element.style.opacity=neighbors.has(n.id)?'1':'.25';n.element.querySelector('text').style.display=neighbors.has(n.id)?'':'none'}}for(const{edge,line}of this.edgeElements){line.setAttribute('stroke',edge.source===id||edge.target===id?'#9ce1ce':'#233540');line.setAttribute('stroke-width',edge.source===id||edge.target===id?2:1)}this.detail.replaceChildren(el('strong',node.kind+' · '+node.label),el('p',connections.length+' recorded connection(s) · '+connections.map(e=>e.relation).filter((x,i,a)=>a.indexOf(x)===i).join(', ')));const details=el('details');details.append(el('summary','Record details and provenance'),el('pre',JSON.stringify(node.details,null,2)));this.detail.append(details);}
+  zoom(factor){this.scale=Math.max(.35,Math.min(3.5,this.scale*factor));this.transform()}
+  transform(){this.world.setAttribute('transform',`translate(${500+this.offset.x},${200+this.offset.y}) scale(${this.scale}) translate(-500,-200)`)}
+  paint(){const byId=new Map(this.nodes.map(n=>[n.id,n]));for(const n of this.nodes)if(n.element&&n.visible)n.element.setAttribute('transform',`translate(${n.x},${n.y})`);for(const{edge,line}of this.edgeElements){const a=byId.get(edge.source),b=byId.get(edge.target);for(const[k,v]of Object.entries({x1:a.x,y1:a.y,x2:b.x,y2:b.y}))line.setAttribute(k,v)}}
+  animate(){if(!this.host.isConnected)return;if(this.energy>0&&!document.hidden&&!matchMedia('(prefers-reduced-motion: reduce)').matches){this.energy--;const visible=this.nodes.filter(n=>n.visible);for(let i=0;i<visible.length;i++){const a=visible[i];if(a===this.drag)continue;for(let j=i+1;j<visible.length;j++){const b=visible[j],dx=a.x-b.x,dy=a.y-b.y,d=Math.max(80,dx*dx+dy*dy),f=850/d;a.vx+=dx*f;a.vy+=dy*f;b.vx-=dx*f;b.vy-=dy*f}a.vx+=(500-a.x)*.002;a.vy+=(200-a.y)*.002;a.vx*=.75;a.vy*=.75;a.x=Math.max(25,Math.min(920,a.x+a.vx));a.y=Math.max(25,Math.min(375,a.y+a.vy))}this.paint()}setTimeout(()=>this.animate(),this.energy>0?40:500)}
+}

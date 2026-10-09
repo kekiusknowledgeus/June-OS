@@ -1,0 +1,15 @@
+# Automation
+
+SQLite stores schedules independently of the UI. `schedule.create` accepts a timezone-aware ISO8601 due timestamp, title, optional project, repeat interval in seconds (minimum 60), and an optional agent prompt. Without a prompt it emits a reminder; with a prompt it enqueues a normal bounded job. All scheduled tool actions still go through the same permissions. Scheduled prompts never bypass approvals.
+
+The scheduler scans every five seconds while the runtime is active. Missed one-shot reminders are delivered after restart. A repeating schedule advances to its next future occurrence, coalescing missed intervals rather than flooding the user. Stable event IDs and notification cooldowns reduce duplicates across restart. Dispatch and database acknowledgement are not a distributed exactly-once transaction; a crash can leave a scheduled job interrupted and require review.
+
+Tasks have title, description, status, priority (1 highest), project, deadline, dependencies, source and timestamps. Overdue tasks emit events. Dependencies must exist and be done before the dependent task can be marked done. The agent interprets natural language dates with the configured `Asia/Calcutta` timezone; direct forms require explicit offsets.
+
+The event bus persists events, isolates subscriber failures, and can accept new event producers. Built-in producers include timers, task deadlines, shell completion/failure, and opt-in exact file/process watchers. Watchers run every fifteen seconds. Broad activity surveillance, email polling and calendar polling are not silently enabled. A scheduled prompt can explicitly request a connected-service check.
+
+The proactive engine requires importance >= 0.65, honors quiet mode/privacy/automation pause, and uses a 120-second notification cooldown. Notifications are available in local records, console, the native tray, and speech when enabled. Quiet mode suppresses delivery; it does not pause due-time advancement. The runtime must be running for notifications; no Windows startup task is registered automatically.
+
+`Start-June.cmd` launches the native app; closing its window leaves the tray/runtime running. Exit or “June, shut down” stops June without shutting down Windows. `.\.venv\Scripts\python.exe -m june serve` runs a headless local service. Do not run two instances on the same data directory. Settings can explicitly create/remove June's own per-user Startup entry; login launch is minimized to the tray. It is not installed automatically.
+
+Jobs persist queued/running/paused/waiting_for_permission/waiting_external/completed/failed/cancelled/interrupted states. Pause cancels in-flight execution safely and saves a paused record. Resume creates a fresh observed attempt and requires fresh permissions, not instruction-pointer continuation. Background requests and “tell me when…” jobs store completion notifications; local status/attention questions remain responsive while a job is running. Arbitrary application side effects cannot always be rolled back after cancellation.
