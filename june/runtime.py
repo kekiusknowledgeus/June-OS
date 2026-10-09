@@ -738,7 +738,7 @@ class Runtime:
             configured = bool(self.vault.get("OPENAI_API_KEY"))
             model_name = self.config.model
         elif self.config.provider == "june_v0":
-            configured = self.brain.checkpoint_path.is_file()
+            configured = (self.config.root / "models" / "june" / "checkpoints" / "june_v0_10m.pt").is_file()
             model_name = "june_v0_10m"
         else:
             configured = bool(self.config.local_model)
