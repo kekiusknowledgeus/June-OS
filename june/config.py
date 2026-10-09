@@ -7,11 +7,9 @@ import os
 @dataclass
 class Config:
     root: Path = field(default_factory=lambda: Path(os.environ.get("JUNE_ROOT", "D:/June")))
-    provider: str = "gemini"
+    provider: str = "june_v0"
     model: str = "gpt-4.1-mini"
-    gemini_model: str = "gemini-2.5-flash"
     provider_daily_calls: int = 150
-    provider_min_interval: float = 1.0
     hotkey: str = "Ctrl+Space"
     orb_enabled: bool = True
     orb_size: int = 112
@@ -60,6 +58,15 @@ class Config:
         path = base / "config.json"
         data = json.loads(path.read_text("utf-8")) if path.exists() else {}
         data.pop("root", None)
+        # Old installations may still have hosted-provider settings on disk.
+        # Migrate them to June V0 and persist that change without touching secrets.
+        changed = data.get("provider") == "gemini"
+        if changed:
+            data["provider"] = "june_v0"
+        for legacy_key in ("gemini_model", "provider_min_interval"):
+            if legacy_key in data:
+                data.pop(legacy_key)
+                changed = True
         config = cls(root=base, **data)
         if not config.allowed_roots:
             config.allowed_roots = [str(base)]
@@ -78,6 +85,8 @@ class Config:
             (base / "models/june" / folder).mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(base / ".cache/browsers"))
         os.environ.setdefault("HF_HOME", str(base / ".cache/huggingface"))
+        if changed and path.exists():
+            config.save()
         return config
 
     def save(self):
