@@ -12,7 +12,7 @@ class NeuralInspector:
 
     def get_model_info(self):
         c = self.runtime.config
-        model = c.gemini_model if c.provider == "gemini" else c.model if c.provider == "openai" else c.local_model
+        model = c.gemini_model if c.provider == "gemini" else c.model if c.provider == "openai" else "june_v0_10m" if c.provider == "june_v0" else c.local_model
         return {"provider": c.provider, "model": model, "location": "External" if self.runtime.brain.external else "Local", "model_internals": "unavailable", "supports_internal_inspection": self.supports_internal_inspection()}
 
     def unavailable(self):
