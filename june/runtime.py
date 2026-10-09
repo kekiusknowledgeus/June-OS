@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from .automation import EventBus, Notifications, ProactiveEngine, Scheduler, Watcher
 from .brain import OpenAIBrain, LocalJuneBrain
+from .v0_brain import JuneV0Brain
 from .config import Config
 from .integrations import Integrations
 from .memory import Memory
@@ -42,7 +43,7 @@ class Runtime:
         self.policy = Policy(self.config)
         self.trust = Trust(self)
         self.approval_arguments = {}
-        providers = {"gemini": lambda: GeminiBrain(self.config, self.vault), "openai": lambda: OpenAIBrain(self.config, self.vault), "local": lambda: LocalJuneBrain(self.config)}
+        providers = {"gemini": lambda: GeminiBrain(self.config, self.vault), "openai": lambda: OpenAIBrain(self.config, self.vault), "local": lambda: LocalJuneBrain(self.config), "june_v0": lambda: JuneV0Brain(self.config)}
         if self.config.provider not in providers:
             raise ValueError("Unknown brain provider")
         self.brain = brain or providers[self.config.provider]()
@@ -733,10 +734,21 @@ class Runtime:
 
     async def health(self):
         import psutil
-        configured = bool(self.vault.get("GEMINI_API_KEY")) if self.config.provider == "gemini" else bool(self.vault.get("OPENAI_API_KEY")) if self.config.provider == "openai" else bool(self.config.local_model)
+        if self.config.provider == "gemini":
+            configured = bool(self.vault.get("GEMINI_API_KEY"))
+            model_name = self.config.gemini_model
+        elif self.config.provider == "openai":
+            configured = bool(self.vault.get("OPENAI_API_KEY"))
+            model_name = self.config.model
+        elif self.config.provider == "june_v0":
+            configured = self.brain.checkpoint_path.is_file()
+            model_name = "june_v0_10m"
+        else:
+            configured = bool(self.config.local_model)
+            model_name = self.config.local_model
         return {
             "status": "running", "provider": self.config.provider,
-            "model": self.config.gemini_model if self.config.provider == "gemini" else self.config.model if self.config.provider == "openai" else self.config.local_model,
+            "model": model_name,
             "agent_state": self.agent_state,
             "projects_root": self.config.projects_root, "allowed_workspace_roots": self.config.allowed_workspace_roots,
             "hotkey": self.config.hotkey, "hotkey_status": getattr(self, "hotkey_status", "desktop only"),
