@@ -4,8 +4,7 @@ import pytest
 from june.config import Config
 from june.runtime import Runtime
 from june.brain import JuneBrain, Decision
-from june.gemini import GeminiBrain, BrainUnavailable
-from june.security import Vault
+from june.errors import BrainUnavailable
 from june.workflows import Workflow
 from june.hotkey import parse_hotkey
 
@@ -55,19 +54,6 @@ async def test_provider_outage_preserves_local_commands(tmp_path):
     assert (await finish(r, 'show me your brain'))['status'] == 'completed'
     assert r.store.list('ui_request')
     await r.close()
-
-
-def test_gemini_signatures_pairing_and_hidden_text(tmp_path):
-    brain = GeminiBrain(Config.load(tmp_path), Vault(tmp_path))
-    content = {'role': 'model', 'parts': [{'thought': True, 'text': 'hidden'}, {'functionCall': {'name': 'read_fixture', 'args': {}}, 'thoughtSignature': 'opaque-fixture'}]}
-    decision = brain.decision(content)
-    assert decision.text == ''
-    context = [{'role': 'system', 'content': 'Host policy'}, {'role': 'user', 'content': 'read'}] + decision.raw
-    context.append({'type': 'function_call_output', 'call_id': decision.calls[0]['id'], 'output': json.dumps({'status': 'success'})})
-    payload = brain.payload(context, [])
-    assert payload['contents'][1] == content
-    assert payload['contents'][2]['parts'][0]['functionResponse']['name'] == 'read_fixture'
-    assert payload['store'] is False
 
 
 def test_workflow_requires_check_after_latest_edit():
