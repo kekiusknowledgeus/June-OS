@@ -5,10 +5,9 @@ initialized weights on Tiny Shakespeare. It is not an instruction model,
 cannot answer factual questions reliably, call tools or interpret images.
 This integration deliberately produces zero tool calls.
 
-Your existing Gemini backend, memory, voice, permissions, and desktop interface
-stay unchanged. The model checkpoint is deliberately **not** stored on GitHub.
+June V0 is now the default inference backend. Memory, voice, permissions, and desktop interface are retained. The model checkpoint is deliberately **not** stored on GitHub.
 
-## Try it on Windows without changing the normal June backend
+## Try it on Windows
 
 1. Get the changes from this branch onto your laptop.
 2. Place your trained checkpoint at:
@@ -28,15 +27,22 @@ stay unchanged. The model checkpoint is deliberately **not** stored on GitHub.
 
 This generates text locally on CPU. It does not require an external API.
 
-## Optional temporary desktop experiment
+## June OS desktop
 
-Leave `"provider": "gemini"` in `config.json` for ordinary work.
-To use V0 in June's existing UI, **stop June**, change the provider in your
-local config to `"june_v0"`, then restart. The generated text will usually
-be nonsensical. June V0 cannot select or execute tools; known host-side
-commands may still work without it. Restore `"provider": "gemini"` after
-testing. Do not modify or commit credentials.
+Stop June and make sure your local `D:\\June\\config.json` uses
+`"provider": "june_v0"`. Old `"provider": "gemini"` configuration is
+automatically migrated when June starts using these changes.
+
+Start June normally. June V0's generative responses will generally be
+nonsensical because the model was trained only on Tiny Shakespeare.
+June V0 cannot choose or execute tools; known host-side commands may
+still work without inference. It does not support images.
+
+Gemini's provider implementation has been removed from June OS.
+The separately supported OpenAI and generic local endpoints are
+still available as optional provider implementations, but are not
+used by default. No AI API key is required for June V0.
 
 The experimental model is loaded lazily, on CPU. Training requires separate
-code and compute. PyTorch is an optional dependency, so normal June installs
-do not need to install it.
+code and compute. PyTorch is an optional dependency, but is required
+to use the default June V0 brain for text generation.
