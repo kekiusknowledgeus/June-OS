@@ -22,7 +22,7 @@ from .webtools import WebResearch, Browser
 from .windows import Windows
 from .camera import Camera
 from .instance import InstanceLock
-from .gemini import GeminiBrain, BrainUnavailable
+from .errors import BrainUnavailable
 from .context import CurrentContext, Timeline
 from .commands import LocalCommands
 from .apps import Applications
@@ -43,7 +43,7 @@ class Runtime:
         self.policy = Policy(self.config)
         self.trust = Trust(self)
         self.approval_arguments = {}
-        providers = {"gemini": lambda: GeminiBrain(self.config, self.vault), "openai": lambda: OpenAIBrain(self.config, self.vault), "local": lambda: LocalJuneBrain(self.config), "june_v0": lambda: JuneV0Brain(self.config)}
+        providers = {"openai": lambda: OpenAIBrain(self.config, self.vault), "local": lambda: LocalJuneBrain(self.config), "june_v0": lambda: JuneV0Brain(self.config)}
         if self.config.provider not in providers:
             raise ValueError("Unknown brain provider")
         self.brain = brain or providers[self.config.provider]()
@@ -734,10 +734,7 @@ class Runtime:
 
     async def health(self):
         import psutil
-        if self.config.provider == "gemini":
-            configured = bool(self.vault.get("GEMINI_API_KEY"))
-            model_name = self.config.gemini_model
-        elif self.config.provider == "openai":
+        if self.config.provider == "openai":
             configured = bool(self.vault.get("OPENAI_API_KEY"))
             model_name = self.config.model
         elif self.config.provider == "june_v0":
