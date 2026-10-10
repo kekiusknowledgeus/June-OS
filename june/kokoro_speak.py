@@ -1,13 +1,14 @@
-"""Persistent local Kokoro TTS worker, running under June's Python 3.12 voice venv.
+"""Persistent offline Kokoro voice worker running in Python 3.12.
 
-Input: one JSON object per line on stdin, with command=speak and text.
-Output: ready / done / error JSON records on stdout. Playback is synchronous,
-so the parent can interrupt it by terminating this process.
+Model weights load once. Replies are synthesized in short chunks so playback
+begins before the whole reply has been generated.
 """
 import io
 import json
 from pathlib import Path
+import re
 import sys
+import time
 import winsound
 
 import soundfile as sf
@@ -18,6 +19,25 @@ def emit(data):
     print(json.dumps(data, ensure_ascii=False), flush=True)
 
 
+def speech_chunks(text, max_chars=120):
+    """Prefer natural sentence boundaries while keeping first audio short."""
+    text = re.sub(r"\s+", " ", text).strip()
+    current = []
+    length = 0
+    for word in text.split():
+        added = len(word) + (1 if current else 0)
+        if current and length + added > max_chars:
+            yield " ".join(current)
+            current, length = [], 0
+        current.append(word)
+        length += len(word) + (1 if len(current) > 1 else 0)
+        if length >= 55 and word.endswith((".", "!", "?", ";", ":")):
+            yield " ".join(current)
+            current, length = [], 0
+    if current:
+        yield " ".join(current)
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("Usage: kokoro_speak.py MODEL.onnx VOICES.bin")
@@ -25,7 +45,6 @@ def main():
     if not model.is_file() or not voices.is_file():
         raise SystemExit("Kokoro model files are missing")
 
-    # Expensive initialization happens once, not for every June response.
     tts = Kokoro(str(model), str(voices))
     emit({"status": "ready"})
 
@@ -37,15 +56,22 @@ def main():
             text = request.get("text", "")
             if not isinstance(text, str):
                 raise ValueError("Text must be a string")
-            text = text.strip()[:1500]
-            if text:
+            start = time.perf_counter()
+            first_audio = None
+            parts = 0
+            for chunk in speech_chunks(text[:1500]):
                 samples, sample_rate = tts.create(
-                    text, voice="af_heart", speed=1.0, lang="en-us"
+                    chunk, voice="af_heart", speed=1.0, lang="en-us"
                 )
                 output = io.BytesIO()
                 sf.write(output, samples, sample_rate, format="WAV")
+                if first_audio is None:
+                    first_audio = round(time.perf_counter() - start, 2)
                 winsound.PlaySound(output.getvalue(), winsound.SND_MEMORY)
-            emit({"status": "done"})
+                parts += 1
+            emit({"status": "done", "chunks": parts,
+                  "first_audio_seconds": first_audio,
+                  "total_seconds": round(time.perf_counter() - start, 2)})
         except Exception as exc:
             emit({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
 
