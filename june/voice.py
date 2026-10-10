@@ -47,6 +47,20 @@ class WindowsSpeech:
         self.input_level = 0
         self.speaker_reader = None
         self.output_meter = None
+        self.kokoro_process = None
+        self.kokoro_task = None
+
+    def _kokoro_paths(self):
+        """Use only the separate test environment. The original D:/June is unaffected."""
+        root = self.config.root
+        python = root / ".venv-voice" / "Scripts" / "python.exe"
+        model = root / "models" / "kokoro" / "kokoro-v1.0.int8.onnx"
+        voices = root / "models" / "kokoro" / "voices-v1.0.bin"
+        return python, model, voices
+
+    def _kokoro_available(self):
+        python, model, voices = self._kokoro_paths()
+        return all(p.is_file() for p in (python, model, voices))
 
     async def start(self, push_to_talk=False):
         if self.config.privacy or not self.config.voice_enabled:
@@ -69,7 +83,8 @@ class WindowsSpeech:
                 self.state = "unavailable"
                 self.error = "Selected microphone could not be opened"
                 raise RuntimeError(self.error) from None
-        await self._ensure_speaker()
+        if not self._kokoro_available():
+            await self._ensure_speaker()
         self.state = "starting"
         self.push_to_talk = push_to_talk
         self.awake_until = time.monotonic() + 30 if push_to_talk else 0
@@ -153,6 +168,50 @@ class WindowsSpeech:
     async def speak(self, text):
         if self.config.privacy or not self.config.voice_enabled:
             return
+        if self._kokoro_available():
+            await self.stop_speaking()
+            python, model, voices = self._kokoro_paths()
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    str(python), str(Path(__file__).with_name("kokoro_speak.py")),
+                    str(model), str(voices),
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+            except OSError:
+                self.error = "Kokoro failed to start; using Windows speech"
+            else:
+                self.kokoro_process = process
+                self.speaking = True
+                self.kokoro_task = asyncio.create_task(
+                    self._finish_kokoro(process, text[:1500])
+                )
+                return
+        await self._sapi_speak(text)
+
+    async def _finish_kokoro(self, process, text):
+        try:
+            _, errors = await process.communicate(text.encode("utf-8"))
+            if process.returncode:
+                self.error = (
+                    "Kokoro failed; using Windows speech: "
+                    + errors.decode("utf-8", errors="replace").strip()[-300:]
+                )
+                if self.config.voice_enabled and not self.config.privacy:
+                    await self._sapi_speak(text)
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
+        finally:
+            if self.kokoro_process is process:
+                self.kokoro_process = None
+                self.kokoro_task = None
+                self.speaking = False
+
+    async def _sapi_speak(self, text):
         await self._ensure_speaker()
         self.speaker.stdin.write((json.dumps({"command": "speak", "text": text[:8000]}) + "\n").encode("utf-8"))
         await self.speaker.stdin.drain()
@@ -210,6 +269,16 @@ class WindowsSpeech:
         self.audio_writer = asyncio.create_task(pump())
 
     async def stop_speaking(self):
+        kokoro_task = self.kokoro_task
+        if kokoro_task and kokoro_task is not asyncio.current_task():
+            kokoro_task.cancel()
+            await asyncio.gather(kokoro_task, return_exceptions=True)
+        self.kokoro_task = None
+        process = self.kokoro_process
+        if process and process.returncode is None:
+            process.kill()
+            await process.wait()
+        self.kokoro_process = None
         self.speaking = False
         if self.output_meter:
             self.output_meter.stop()
