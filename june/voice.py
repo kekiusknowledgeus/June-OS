@@ -165,51 +165,63 @@ class WindowsSpeech:
                 self.state = "unavailable"
                 self.error = "Speech engine stopped; check Windows speech language and microphone"
 
-    async def speak(self, text):
-        if self.config.privacy or not self.config.voice_enabled:
-            return
-        if self._kokoro_available():
-            await self.stop_speaking()
-            python, model, voices = self._kokoro_paths()
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    str(python), str(Path(__file__).with_name("kokoro_speak.py")),
-                    str(model), str(voices),
-                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                )
-            except OSError:
-                self.error = "Kokoro failed to start; using Windows speech"
-            else:
-                self.kokoro_process = process
-                self.speaking = True
-                self.kokoro_task = asyncio.create_task(
-                    self._finish_kokoro(process, text[:1500])
-                )
-                return
-        await self._sapi_speak(text)
-
-    async def _finish_kokoro(self, process, text):
+    async def _ensure_kokoro(self):
+        if self.kokoro_process and self.kokoro_process.returncode is None:
+            return self.kokoro_process
+        python, model, voices = self._kokoro_paths()
+        process = await asyncio.create_subprocess_exec(
+            str(python), str(Path(__file__).with_name("kokoro_speak.py")),
+            str(model), str(voices),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
         try:
-            _, errors = await process.communicate(text.encode("utf-8"))
-            if process.returncode:
-                self.error = (
-                    "Kokoro failed; using Windows speech: "
-                    + errors.decode("utf-8", errors="replace").strip()[-300:]
-                )
-                if self.config.voice_enabled and not self.config.privacy:
-                    await self._sapi_speak(text)
-        except asyncio.CancelledError:
+            ready = await asyncio.wait_for(process.stdout.readline(), timeout=35)
+            data = json.loads(ready) if ready else {}
+            if data.get("status") != "ready":
+                raise RuntimeError("Kokoro voice worker did not initialize")
+        except Exception:
             if process.returncode is None:
                 process.kill()
                 await process.wait()
             raise
+        self.kokoro_process = process
+        return process
+
+    async def speak(self, text):
+        if self.config.privacy or not self.config.voice_enabled:
+            return
+        if self._kokoro_available():
+            # Cancel any playing reply; reuse the warm worker when it is idle.
+            if self.kokoro_task:
+                await self.stop_speaking()
+            try:
+                process = await self._ensure_kokoro()
+                process.stdin.write((json.dumps({"command": "speak", "text": text[:1500]}) + "\n").encode("utf-8"))
+                await process.stdin.drain()
+                self.speaking = True
+                self.kokoro_task = asyncio.create_task(self._finish_kokoro(process))
+                return
+            except Exception as exc:
+                self.error = "Kokoro unavailable: " + str(exc)[:180]
+                await self.stop_speaking()
+        await self._sapi_speak(text)
+
+    async def _finish_kokoro(self, process):
+        try:
+            line = await process.stdout.readline()
+            data = json.loads(line) if line else {}
+            if data.get("status") != "done":
+                raise RuntimeError(data.get("error", "Kokoro worker stopped"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.error = "Kokoro playback failed: " + str(exc)[:180]
         finally:
-            if self.kokoro_process is process:
-                self.kokoro_process = None
+            self.speaking = False
+            if self.kokoro_task is asyncio.current_task():
                 self.kokoro_task = None
-                self.speaking = False
 
     async def _sapi_speak(self, text):
         await self._ensure_speaker()
@@ -275,10 +287,10 @@ class WindowsSpeech:
             await asyncio.gather(kokoro_task, return_exceptions=True)
         self.kokoro_task = None
         process = self.kokoro_process
-        if process and process.returncode is None:
+        if process and process.returncode is None and kokoro_task:
             process.kill()
             await process.wait()
-        self.kokoro_process = None
+            self.kokoro_process = None
         self.speaking = False
         if self.output_meter:
             self.output_meter.stop()
@@ -293,6 +305,11 @@ class WindowsSpeech:
         self.speaker_reader = None
 
     async def stop(self):
+        # A full voice shutdown also releases the idle warm Kokoro worker.
+        if self.kokoro_process and self.kokoro_process.returncode is None:
+            self.kokoro_process.kill()
+            await self.kokoro_process.wait()
+        self.kokoro_process = None
         self.state = "muted"
         self.input_level = 0
         if self.ptt_timeout and self.ptt_timeout is not asyncio.current_task():
