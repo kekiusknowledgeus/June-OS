@@ -214,6 +214,11 @@ class WindowsSpeech:
             data = json.loads(line) if line else {}
             if data.get("status") != "done":
                 raise RuntimeError(data.get("error", "Kokoro worker stopped"))
+            self.last_kokoro_timings = {
+                "first_audio_seconds": data.get("first_audio_seconds"),
+                "total_seconds": data.get("total_seconds"),
+                "chunks": data.get("chunks"),
+            }
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -304,12 +309,19 @@ class WindowsSpeech:
             await asyncio.gather(self.speaker_reader, return_exceptions=True)
         self.speaker_reader = None
 
-    async def stop(self):
-        # A full voice shutdown also releases the idle warm Kokoro worker.
+    async def shutdown_kokoro(self):
+        """Release the warm voice worker at application shutdown."""
+        await self.stop_speaking()
         if self.kokoro_process and self.kokoro_process.returncode is None:
             self.kokoro_process.kill()
             await self.kokoro_process.wait()
         self.kokoro_process = None
+
+    async def stop(self):
+        # Muting the microphone must not unload an idle Kokoro model.
+        # Privacy mode also releases the voice model.
+        if self.config.privacy or not self.config.voice_enabled:
+            await self.shutdown_kokoro()
         self.state = "muted"
         self.input_level = 0
         if self.ptt_timeout and self.ptt_timeout is not asyncio.current_task():
