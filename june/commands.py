@@ -41,7 +41,7 @@ class LocalCommands:
                 return 'Browser Bridge returned an unexpected tab listing format.'
             if not tabs:
                 return 'Browser Bridge reported no accessible tabs.'
-            return 'Open browser tabs:\\n' + '\\n'.join(
+            return 'Open browser tabs:\n' + '\n'.join(
                 f"{i}. {tab.get('title') or '(untitled)'}"
                 for i, tab in enumerate(tabs[:30], 1)
                 if isinstance(tab, dict)
