@@ -71,6 +71,7 @@ class GroqBrain(JuneBrain):
             "edit", "change", "fix", "debug", "test", "build", "file",
             "folder", "project", "code", "python", "javascript", "git",
             "search", "research", "browse", "website", "web", "url",
+            "send", "message", "whatsapp", "reply", "chat",
             "read", "inspect", "check", "list", "find", "show",
             "window", "screen", "app", "click", "type", "computer",
             "copy", "move", "delete", "rename", "remember", "memory",
@@ -99,6 +100,7 @@ class GroqBrain(JuneBrain):
         browser_intent = any(s in prompt for s in (
             "web", "browser", "research", "website", "url", "google",
             "youtube", "search online", "internet", "tab", "page",
+            "whatsapp", "spotify", "send message", "send a", "message",
         ))
         desktop_intent = any(s in prompt for s in (
             "app", "notepad", "calculator", "explorer", "vs code",
@@ -125,6 +127,9 @@ class GroqBrain(JuneBrain):
             add("web__search", "web__read", "browser__personal__search",
                 "browser__personal__open", "browser__personal__active_tab",
                 "browser__personal__read", "browser__personal__list_tabs")
+            if any(term in prompt for term in ("send", "message", "reply", "type", "click", "fill", "whatsapp")):
+                add("browser__personal__type", "browser__personal__click",
+                    "browser__personal__focus", "browser__personal__submit")
         if desktop_intent:
             add("app__open", "path__open", "windows__observe",
                 "window__focus", "screen__capture", "windows__action")
