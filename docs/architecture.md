@@ -1,6 +1,8 @@
 # June architecture
 
-June is a Python application rooted in `D:\June`, with its environment in `.venv` and runtime state in `data`. It is a working prototype, not a finished general-purpose autonomous operating system.
+June is a Python application rooted in its checkout (currently `D:\June-V0-Test`),
+or an explicit `--root`/`JUNE_ROOT`, with its environment in `.venv` and runtime
+state in `data`. It is a working prototype, not a finished autonomous OS.
 
 `Runtime` owns orchestration. Interfaces contain no provider-specific orchestration: `JuneBrain` returns `Decision` values; `Registry` advertises tools; `Policy` decides whether the host needs approval; `Store` persists local records; `EventBus` routes observed events. Both desktop and browser interfaces call the same authenticated FastAPI application. The terminal runs the same runtime directly.
 
@@ -14,7 +16,8 @@ SQLite WAL stores messages, memories, tasks, projects, schedules, events, notifi
 |---|---|
 | `runtime.py` | Context, agent loop, policy enforcement, jobs and coordination |
 | `brain.py` | OpenAI Responses adapter and loopback compatible local model adapter |
-| `gemini.py` | Replaceable Gemini streaming text/tool/image transport; opaque signatures stay provider-side protocol data |
+| `groq_brain.py` | Groq streaming text/tool transport, connection reuse, cooldowns and complete-response validation |
+| `v0_brain.py`, `v0_model.py` | Separate experimental character model; no tool calls or vision |
 | `context.py`, `commands.py` | Durable working context, timelines, local commands and continuation briefing |
 | `apps.py`, `workflows.py` | Structured project adapters and evidence gates for coding/research |
 | `inspection.py`, `hotkey.py`, `startup.py` | Honest runtime inspection, global shortcut and opt-in login startup |
@@ -36,6 +39,11 @@ Background work is a five-second timer and a fifteen-second opt-in watcher scan.
 
 ## Current limits
 
-Gemini 2.5 Flash is configured and live-tested. External failures produce waiting_external jobs; narrow local commands continue without inference. One action lane prevents competing agent actions; cancellation and selected read-only local questions bypass that lane. Daily call limits include vision; usage and latency are local telemetry. Native notifications and speech failures do not erase completed work.
+Groq, OpenAI and a generic local endpoint are available alongside experimental
+June V0. No hosted provider was live-tested in the 2026-10-11 pass. External
+outages produce waiting_external jobs; narrow local commands continue without
+inference. One action lane prevents competing agent actions. Cancellation and
+selected local questions bypass that lane. Daily call limits, usage and latency
+are local telemetry. Notification/speech failures do not erase completed work.
 
 Local model inference requires a separately configured server. No weights were installed. Hardware contracts do not imply connected hardware. GUI verification requires a recent capture ID, stable target handle/bounds/title/pixels, and analysis of the resulting image before another action. This conservative guard can reject animated pages and changed focus. Model analysis alone is not a formal proof of the outcome.

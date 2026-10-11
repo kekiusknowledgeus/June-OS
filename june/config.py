@@ -2,11 +2,12 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import json
 import os
+import math
 
 
 @dataclass
 class Config:
-    root: Path = field(default_factory=lambda: Path(os.environ.get("JUNE_ROOT", "D:/June")))
+    root: Path = field(default_factory=lambda: Path(os.environ.get("JUNE_ROOT", Path(__file__).resolve().parents[1])))
     provider: str = "june_v0"
     model: str = "gpt-4.1-mini"
     groq_model: str = "qwen/qwen3.8-27b"
@@ -23,6 +24,9 @@ class Config:
     speech_input_device: str = ""
     speech_output_device: str = ""
     speech_voice: str = ""
+    speech_backend: str = "sapi"
+    kokoro_threads: int = 2
+    kokoro_first_audio_timeout: float = 8.0
     local_url: str = "http://127.0.0.1:11434/v1"
     local_model: str = ""
     timezone: str = "Asia/Calcutta"
@@ -55,7 +59,7 @@ class Config:
 
     @classmethod
     def load(cls, root=None):
-        base = Path(root or os.environ.get("JUNE_ROOT", "D:/June")).resolve()
+        base = Path(root or os.environ.get("JUNE_ROOT", Path(__file__).resolve().parents[1])).resolve()
         path = base / "config.json"
         data = json.loads(path.read_text("utf-8")) if path.exists() else {}
         data.pop("root", None)
@@ -69,6 +73,12 @@ class Config:
                 data.pop(legacy_key)
                 changed = True
         config = cls(root=base, **data)
+        if config.speech_backend not in {'sapi', 'kokoro', 'auto'}:
+            raise ValueError('Invalid speech backend')
+        if type(config.kokoro_threads) is not int or not 1 <= config.kokoro_threads <= 8:
+            raise ValueError('Kokoro threads must be 1–8')
+        if not isinstance(config.kokoro_first_audio_timeout, (int, float)) or not math.isfinite(config.kokoro_first_audio_timeout) or not .1 <= config.kokoro_first_audio_timeout <= 60:
+            raise ValueError('Kokoro first-audio deadline must be 0.1–60 seconds')
         if not config.allowed_roots:
             config.allowed_roots = [str(base)]
         if 'allowed_workspace_roots' not in data:

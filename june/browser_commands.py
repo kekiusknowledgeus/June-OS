@@ -17,7 +17,7 @@ SITE_REGISTRY = {
     'amazon': 'https://www.amazon.com', 'openai': 'https://openai.com',
 }
 LOCAL_TARGETS = {'it','this','project','the project','neural explorer','notepad',
-                 'calculator','explorer','vs code','vscode','file','folder'}
+                 'calculator','explorer','vs code','vscode','file','folder','tabs','browser tabs'}
 
 
 def search_url(query, site='google'):
@@ -53,19 +53,17 @@ def domain_url(target):
 
 def resolve_browser_command(text, is_project=lambda name: False):
     command = re.sub(r'^june[,.?\s]+','',text.strip(),flags=re.I)
+    if re.match(r'^search memory for\s', command, re.I):
+        return None
     search = re.fullmatch(r'(?:search(?:\s+(youtube|google))?(?:\s+for)?|google|open youtube and search for)\s+(.+)',command,re.I)
     if search:
         site=(search[1] or ('youtube' if command.lower().startswith('open youtube') else 'google')).lower()
         return {'url':search_url(search[2],site),'resolution':'search','query':search[2]}
+    # Compound action requests belong to the agent loop, not a guessed search.
+    if re.search(r'\b(?:and(?:\s+then)?|then)\s+(?:open|read|click|type|write|search|summarize|find|create|run|send|check|play|pause|close|switch)\b', command, re.I):
+        return None
     opening = re.fullmatch(r'(open|go to|focus)\s+(.+?)(\s+in my browser)?',command,re.I)
     target = opening[2].strip() if opening else command
-    # Compound commands must reach the agent, not become a Google search.
-    # In particular, "open WhatsApp and send ..." is not a navigation-only request.
-    if opening and re.search(
-        r'\b(?:and|then)\s+(?:send|message|type|click|write|post|reply|share|fill|submit)\b',
-        target, re.I
-    ):
-        return None
     if not opening and not re.match(r'(?i)^https?://|^(?:[\w-]+\.)+[\w-]+(?::\d+)?(?:[/?#]|$)',target):
         return None
     # Keep existing app/project handling and local paths out of web search.

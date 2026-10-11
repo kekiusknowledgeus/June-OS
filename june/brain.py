@@ -92,17 +92,8 @@ class LocalJuneBrain(JuneBrain):
     async def respond(self, context, tools):
         if not self.config.local_model:
             raise RuntimeError("Local model is not configured")
-        messages = []
-        for item in context:
-            if item.get("type") == "function_call":
-                messages.append({"role": "assistant", "tool_calls": [{"id": item["call_id"], "type": "function", "function": {"name": item["name"], "arguments": item["arguments"]}}]})
-            elif item.get("type") == "function_call_output":
-                messages.append({"role": "tool", "tool_call_id": item["call_id"], "content": item["output"]})
-            elif "role" in item:
-                content = item.get("content", "")
-                if isinstance(content, list):
-                    content = [{"type": "text", "text": c["text"]} if c["type"] == "input_text" else {"type": "image_url", "image_url": {"url": c["image_url"]}} for c in content]
-                messages.append({"role": item["role"], "content": content})
+        from .groq_brain import GroqBrain
+        messages = GroqBrain._messages(context)
         payload = {"model": self.config.local_model, "messages": messages, "stream": False}
         if tools:
             payload["tools"] = [{"type": "function", "function": {k: v for k, v in t.items() if k not in {"type", "strict"}}} for t in tools]

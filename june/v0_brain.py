@@ -22,7 +22,7 @@ class JuneV0Brain(JuneBrain):
         if not self.checkpoint_path.is_file():
             raise FileNotFoundError(
                 f"June V0 checkpoint missing: {self.checkpoint_path}. "
-                "See docs/june-v0.md; Gemini remains available."
+                "See docs/june-v0.md; Groq and local providers are separate options."
             )
         try:
             import torch
@@ -85,10 +85,7 @@ class JuneV0Brain(JuneBrain):
             "ROMEO:\n",
         )
         sample = await asyncio.to_thread(self.sample, prompt, 64)
-        return Decision(
-            "June V0 experimental character generation (not a factual answer; "
-            "no tool use or command execution):\n" + sample
-        )
+        return Decision("June V0 experimental text sample (not a factual answer):\n" + sample)
 
     async def analyze_image(self, question, data_url):
         raise NotImplementedError("June V0 is text-only and cannot analyze images")

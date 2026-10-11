@@ -45,7 +45,7 @@ async def test_v0_tiny_checkpoint_no_tool_calls(tmp_path):
         [{"role": "user", "content": "AB"}],
         [{"name": "shell.run"}],
     )
-    assert "experimental character generation" in decision.text
+    assert decision.text.startswith("June V0 experimental text sample")
     assert decision.calls == []
     assert decision.raw == []
     assert brain.status == "loaded"

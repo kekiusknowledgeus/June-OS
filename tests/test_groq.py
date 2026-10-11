@@ -40,11 +40,12 @@ async def test_streamed_text_and_tool_call(tmp_path, monkeypatch):
         async def aiter_lines(self):
             events = [
                 {"choices": [{"delta": {"content": "Hello"}}]},
-                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "file.read", "arguments": '{"path":'}}]}}]},
+                {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "file__read", "arguments": '{"path":'}}]}}]},
                 {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"notes.txt"}'}}]}}]},
             ]
             for event in events:
                 yield "data: " + json.dumps(event)
+            yield "data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
             yield "data: [DONE]"
     class Context:
         async def __aenter__(self):
@@ -60,7 +61,7 @@ async def test_streamed_text_and_tool_call(tmp_path, monkeypatch):
             pass
         def stream(self, method, url, **kwargs):
             assert url.startswith("https://api.groq.com/")
-            assert kwargs["json"]["reasoning_effort"] == "none"
+            assert "reasoning_effort" not in kwargs["json"]
             assert kwargs["json"]["stream"] is True
             return Context()
     monkeypatch.setattr("june.groq_brain.httpx.AsyncClient", Client)
@@ -69,11 +70,11 @@ async def test_streamed_text_and_tool_call(tmp_path, monkeypatch):
     brain = GroqBrain(Config.load(tmp_path), FakeVault())
     d = await brain.respond_stream(
         [{"role": "user", "content": "read my file"}],
-        [{"name": "file.read", "description": "Read file", "parameters": {"type": "object", "properties": {}}}],
+        [{"name": "file__read", "description": "Read file", "parameters": {"type": "object", "properties": {}}}],
         collect,
     )
     assert d.text == "Hello" and captured == ["Hello"]
-    assert d.calls == [{"id": "call_1", "name": "file.read", "arguments": {"path": "notes.txt"}}]
+    assert d.calls == [{"id": "call_1", "name": "file__read", "arguments": {"path": "notes.txt"}}]
     assert d.raw[0]["type"] == "function_call"
 
 

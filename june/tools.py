@@ -45,7 +45,7 @@ class Registry:
     def schemas(self):
         return [t.schema() for t in self.tools.values()]
 
-    async def execute(self, name, args):
+    def validate(self, name, args):
         tool = self.get(name)
         if not isinstance(args, dict) or set(args) - set(tool.properties) or any(k not in args for k in tool.required):
             raise ValueError("Invalid tool arguments")
@@ -56,6 +56,10 @@ class Registry:
                 raise ValueError(f"Invalid type for {key}")
             if kind == "array" and (len(value) > 100 or any(not isinstance(x, str) for x in value)):
                 raise ValueError("Invalid string array")
+        return tool
+
+    async def execute(self, name, args):
+        tool = self.validate(name, args)
         return await tool.function(**args)
 
 

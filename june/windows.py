@@ -74,6 +74,8 @@ class Windows:
                 path = self.config.root / "data/captures" / f"{uuid.uuid4().hex}.png"
                 im.save(path)
                 self.last_capture = {"capture_id": path.stem, "path": str(path), "width": im.width, "height": im.height, "origin": [region["left"], region["top"]], "observed_at": time.time(), "window": target, "active": active, "monitor": monitor, "image_hash": hashlib.sha256(im.tobytes()).hexdigest()}
+                if self.pending_verification == 'after-capture-required':
+                    self.pending_verification = str(path)
                 return self.last_capture
         return await asyncio.to_thread(take)
 
@@ -95,13 +97,20 @@ class Windows:
                 raise ValueError("Coordinates outside captured monitor")
             pg.click(before["origin"][0] + x, before["origin"][1] + y)
         elif action == "type":
+            if not text.isascii():
+                raise ValueError('GUI typing supports ASCII only; use a structured browser or file tool for Unicode')
             pg.write(text, interval=.01)
         elif action == "hotkey":
+            if not keys or any(not isinstance(key, str) or key not in pg.KEYBOARD_KEYS for key in keys):
+                raise ValueError('Hotkey requires supported keyboard keys')
             pg.hotkey(*(keys or []))
         elif action == "scroll":
             pg.scroll(max(-20, min(20, amount)))
         else:
             raise ValueError("Unknown GUI action")
+        # Keep the verification gate closed even if after-capture fails or the
+        # task is cancelled after a real input was dispatched.
+        self.pending_verification = 'after-capture-required'
         await asyncio.sleep(.3)
         after = await self.capture(observed["monitor"], observed["active"])
         self.pending_verification = after["path"]
@@ -129,7 +138,11 @@ class Windows:
         if len(windows) != 1:
             raise ValueError("Window title must identify exactly one window")
         windows[0].activate()
-        return active_window()
+        await asyncio.sleep(.1)
+        observed = active_window()
+        if observed['handle'] != windows[0]._hWnd:
+            raise RuntimeError('Windows did not grant foreground focus; observe before retrying')
+        return observed
 
     async def close(self, pid):
         p = psutil.Process(pid)

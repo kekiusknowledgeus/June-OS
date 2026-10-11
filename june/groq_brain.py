@@ -1,5 +1,8 @@
 """Hosted Groq chat model with streamed text and local, permission-checked tool calls."""
 import json
+import math
+import time
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -16,13 +19,15 @@ class GroqBrain(JuneBrain):
         self.vault = vault
         self.status = "configured_unverified"
         self.usage = {}
+        self.retry_at = 0
+        self._client = None
 
     @staticmethod
     def _messages(context):
         messages = []
         for item in context:
             if item.get("type") == "function_call":
-                messages.append({
+                call_message = {
                     "role": "assistant",
                     "tool_calls": [{
                         "id": item["call_id"],
@@ -32,7 +37,11 @@ class GroqBrain(JuneBrain):
                             "arguments": item["arguments"],
                         },
                     }],
-                })
+                }
+                if messages and messages[-1].get("tool_calls"):
+                    messages[-1]["tool_calls"].extend(call_message["tool_calls"])
+                else:
+                    messages.append(call_message)
             elif item.get("type") == "function_call_output":
                 messages.append({
                     "role": "tool",
@@ -79,7 +88,7 @@ class GroqBrain(JuneBrain):
             "task", "schedule", "remind", "status", "summarize",
         )
         # No tool definitions needed for greetings and simple conversation.
-        if not any(term in prompt for term in action_terms):
+        if not any(term in prompt for term in action_terms) and not any(m.get("type") == "function_call_output" for m in context):
             return []
 
         available = {t["name"]: t for t in tools}
@@ -131,9 +140,11 @@ class GroqBrain(JuneBrain):
             if any(term in prompt for term in ("send", "message", "reply", "type", "click", "fill", "whatsapp")):
                 add("browser__personal__type", "browser__personal__click",
                     "browser__personal__focus", "browser__personal__submit")
+            add("browser__personal__activate", "browser__personal__navigate",
+                "browser__personal__scroll", "browser__personal__media")
         if desktop_intent:
             add("app__open", "path__open", "windows__observe",
-                "window__focus", "screen__capture", "windows__action")
+                "window__focus", "screen__capture", "vision__analyze", "windows__action")
         if memory_intent:
             add("memory__search", "memory__remember", "records__list",
                 "attention__briefing", "schedule__create")
@@ -141,118 +152,158 @@ class GroqBrain(JuneBrain):
             add("context__current", "attention__briefing", "file__list",
                 "file__read", "project__list", "app__open", "web__search")
         # A small payload keeps cloud latency and request-size limits down.
-        return [available[name] for name in requested[:18]]
+        # Never starve later capability groups in a mixed-domain request.
+        return [available[name] for name in requested]
 
     async def respond(self, context, tools):
         return await self.respond_stream(context, tools)
 
+    async def close(self):
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    def check_available(self):
+        seconds = math.ceil(self.retry_at - time.monotonic())
+        if seconds > 0:
+            raise BrainUnavailable(f"Groq is cooling down. Retry in {seconds} seconds.", retry_after=seconds)
+
+    @staticmethod
+    def retry_seconds(value):
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            try:
+                seconds = parsedate_to_datetime(value).timestamp() - time.time()
+            except (TypeError, ValueError, OverflowError):
+                seconds = 1
+        if not math.isfinite(seconds):
+            seconds = 1
+        return max(1, min(86400, math.ceil(seconds)))
+
     async def respond_stream(self, context, tools, on_text=None):
+        self.check_available()
+        self.usage = {}
         key = self.vault.get("GROQ_API_KEY")
         if not key:
             self.status = "not_configured"
-            raise RuntimeError("Groq API key is not configured. Use June vault to save GROQ_API_KEY.")
-
+            raise BrainUnavailable("Groq API key is not configured. Use June vault to save GROQ_API_KEY.")
         payload = {
             "model": self.config.groq_model,
             "messages": self._messages(context),
             "stream": True,
             "max_completion_tokens": 1024,
-            "reasoning_effort": "none",
-            "reasoning_format": "hidden",
         }
+        # Reasoning options are model-specific; do not impose Qwen options on
+        # every configured model (several models reject them with HTTP 400).
         selected_tools = self._select_tools(context, tools)
         if selected_tools:
             payload["tools"] = [{
                 "type": "function",
                 "function": {k: v for k, v in tool.items() if k not in ("type", "strict")},
             } for tool in selected_tools]
-
-        text_parts = []
-        pending_calls = {}
+        text_parts, pending_calls = [], {}
+        finished = None
+        done = False
+        self.status = "requesting"
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(90, connect=10), trust_env=False)
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=10)) as client:
-                async with client.stream(
-                    "POST", self.endpoint,
-                    headers={"Authorization": "Bearer " + key},
-                    json=payload,
-                ) as response:
-                    if response.status_code >= 400:
-                        self.status = "error:http_" + str(response.status_code)
-                        if response.status_code == 429:
-                            # Do not keep retrying a rate-limited provider. Expose
-                            # only timing/limit metadata, never credentials or prompts.
-                            retry_header = response.headers.get("retry-after", "")
-                            try:
-                                seconds = max(0, min(86400, int(float(retry_header))))
-                            except (TypeError, ValueError, OverflowError):
-                                seconds = 0
-                            wait = f" Retry after approximately {seconds} seconds." if seconds else " Check your rate-limit reset time."
-                            raise BrainUnavailable(
-                                "Groq rate limit reached (HTTP 429)." + wait
-                                + " June has paused this cloud task; no action was executed.",
-                                retry_after=seconds,
-                            )
-                        if response.status_code == 413:
-                            size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
-                            raise RuntimeError(
-                                f"Groq HTTP 413: request too large "
-                                f"({size // 1024} KiB, {len(selected_tools)} tools). "
-                                "Try a shorter conversation or reduce available tools."
-                            )
-                        raise RuntimeError(
-                            f"Groq returned HTTP {response.status_code}. "
-                            "Check model access, request format, and rate limits."
+            async with self._client.stream(
+                "POST", self.endpoint,
+                headers={"Authorization": "Bearer " + key}, json=payload,
+            ) as response:
+                if response.status_code >= 400:
+                    self.status = "error:http_" + str(response.status_code)
+                    if response.status_code == 429:
+                        seconds = self.retry_seconds(response.headers.get("retry-after"))
+                        self.retry_at = time.monotonic() + seconds
+                        raise BrainUnavailable(
+                            f"Groq rate limit reached (HTTP 429). Retry in {seconds} seconds. "
+                            "Task paused; earlier actions remain recorded and must be reviewed before resuming.",
+                            retry_after=seconds,
                         )
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            event = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
-                        choices = event.get("choices") or []
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta") or {}
-                        fragment = delta.get("content")
-                        if isinstance(fragment, str) and fragment:
-                            text_parts.append(fragment)
-                            if on_text:
-                                await on_text(fragment)
-                        for tool in delta.get("tool_calls") or []:
-                            index = tool.get("index", 0)
-                            pending = pending_calls.setdefault(
-                                index, {"id": "", "name": "", "arguments": ""}
-                            )
-                            if tool.get("id"):
-                                pending["id"] = tool["id"]
-                            function = tool.get("function") or {}
-                            pending["name"] += function.get("name") or ""
-                            pending["arguments"] += function.get("arguments") or ""
-        except httpx.HTTPError as exc:
+                    if response.status_code in {408, 500, 502, 503, 504}:
+                        raise ConnectionError(f"Groq temporarily unavailable (HTTP {response.status_code}).")
+                    raise BrainUnavailable(f"Groq returned HTTP {response.status_code}. Check model access and request size/format.")
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        done = True
+                        break
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError:
+                        raise BrainUnavailable("Groq sent malformed stream data; no generated tools were executed.") from None
+                    if not isinstance(event, dict) or event.get("error"):
+                        raise BrainUnavailable("Groq stream reported an error.")
+                    usage = event.get("usage") or (event.get("x_groq") or {}).get("usage")
+                    if isinstance(usage, dict):
+                        self.usage = {k: v for k, v in usage.items() if isinstance(v, (int, float))}
+                    choices = event.get("choices") or []
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    if choice.get("finish_reason"):
+                        finished = choice["finish_reason"]
+                    delta = choice.get("delta") or {}
+                    fragment = delta.get("content")
+                    if isinstance(fragment, str) and fragment:
+                        text_parts.append(fragment)
+                        if sum(map(len, text_parts)) > 64000:
+                            raise BrainUnavailable("Groq response exceeded the output budget.")
+                        if on_text:
+                            await on_text(fragment)
+                    for tool in delta.get("tool_calls") or []:
+                        index = tool.get("index", 0)
+                        if type(index) is not int or not 0 <= index < 8:
+                            raise BrainUnavailable("Groq exceeded the tool-call budget.")
+                        pending = pending_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                        if tool.get("id"):
+                            pending["id"] = tool["id"]
+                        function = tool.get("function") or {}
+                        pending["name"] += function.get("name") or ""
+                        pending["arguments"] += function.get("arguments") or ""
+                        if len(pending["arguments"]) > 64000:
+                            raise BrainUnavailable("Groq tool arguments exceeded the budget.")
+        except httpx.TransportError:
             self.status = "unavailable"
-            raise RuntimeError("Could not connect to Groq. Check the internet connection.") from exc
+            if text_parts or pending_calls:
+                raise BrainUnavailable("Groq stream interrupted. Partial response discarded; no generated tools executed.") from None
+            # Runtime owns the bounded retry and counts each request in its budget.
+            raise ConnectionError("Could not connect to Groq.") from None
+        except (TypeError, AttributeError, KeyError, IndexError):
+            self.status = 'invalid_response'
+            raise BrainUnavailable('Groq returned malformed response fields; no generated tools executed.') from None
+        except BaseException:
+            if self.status == "requesting":
+                self.status = "unavailable"
+            raise
 
+        if not done or finished not in {"stop", "tool_calls"}:
+            self.status = "incomplete"
+            raise BrainUnavailable("Groq response was incomplete or truncated; no generated tools executed.")
         calls, raw = [], []
+        allowed = {t["name"] for t in selected_tools}
+        ids = set()
         for index in sorted(pending_calls):
             item = pending_calls[index]
-            if not item["id"] or not item["name"]:
-                raise RuntimeError("Groq sent an incomplete tool call.")
+            if not item["id"] or item["id"] in ids or item["name"] not in allowed:
+                self.status = "invalid_tool_call"
+                raise BrainUnavailable("Groq sent an unknown, duplicate, or incomplete tool call.")
+            ids.add(item["id"])
             try:
                 args = json.loads(item["arguments"] or "{}")
-            except json.JSONDecodeError as exc:
-                raise RuntimeError("Groq generated invalid tool arguments.") from exc
+            except json.JSONDecodeError:
+                raise BrainUnavailable("Groq generated invalid tool arguments.") from None
             if not isinstance(args, dict):
-                raise RuntimeError("Groq tool arguments must be a JSON object.")
+                raise BrainUnavailable("Groq tool arguments must be a JSON object.")
             calls.append({"id": item["id"], "name": item["name"], "arguments": args})
-            raw.append({
-                "type": "function_call",
-                "call_id": item["id"],
-                "name": item["name"],
-                "arguments": json.dumps(args),
-            })
+            raw.append({"type": "function_call", "call_id": item["id"], "name": item["name"], "arguments": json.dumps(args)})
+        if (finished == "tool_calls") != bool(calls) or (not calls and not "".join(text_parts).strip()):
+            self.status = "incomplete"
+            raise BrainUnavailable("Groq returned an empty or inconsistent response.")
         self.status = "verified"
         return Decision("".join(text_parts), calls, raw)

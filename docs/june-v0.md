@@ -11,11 +11,11 @@ June V0 is now the default inference backend. Memory, voice, permissions, and de
 
 1. Get the changes from this branch onto your laptop.
 2. Place your trained checkpoint at:
-   `D:\June\models\june\checkpoints\june_v0_10m.pt`
+   `D:\June-V0-Test\models\june\checkpoints\june_v0_10m.pt`
 3. Install PyTorch into June's virtual environment:
 
    ```powershell
-   cd D:\June
+   cd D:\June-V0-Test
    .\.venv\Scripts\python.exe -m pip install "torch>=2.5"
    ```
 
@@ -29,7 +29,7 @@ This generates text locally on CPU. It does not require an external API.
 
 ## June OS desktop
 
-Stop June and make sure your local `D:\\June\\config.json` uses
+Stop June and make sure this checkout's `config.json` uses
 `"provider": "june_v0"`. Old `"provider": "gemini"` configuration is
 automatically migrated when June starts using these changes.
 

@@ -134,8 +134,7 @@ def create_app(runtime=None):
         bridge=runtime.personal_browser.bridge
         bridge.credentials={};bridge.last_seen=0;bridge.pair_code=None
         bridge.path.write_text('{}')
-        for future in bridge.pending.values():
-            if not future.done(): future.cancel()
+        bridge.cancel_pending()
         return {'revoked':True}
 
     @app.post('/bridge/pair')
@@ -156,9 +155,7 @@ def create_app(runtime=None):
 
     @app.post('/bridge/claim')
     async def bridge_claim(values: dict):
-        future=runtime.personal_browser.bridge.pending.get(values.get('id'))
-        if runtime.config.privacy or not future or future.done():
-            raise PermissionError('Browser request cancelled or privacy enabled')
+        runtime.personal_browser.bridge.claim(values.get('id'))
         return {'active':True}
 
     @app.get('/api/trust')
@@ -260,12 +257,17 @@ def create_app(runtime=None):
 
     @app.post("/api/preferences")
     async def preferences(values: dict):
-        allowed = {"hotkey", "speech_input_device", "speech_output_device", "speech_voice"}
+        allowed = {"hotkey", "speech_input_device", "speech_output_device", "speech_voice", "speech_backend"}
         if set(values) - allowed or any(not isinstance(v, str) or len(v) > 200 for v in values.values()):
             raise ValueError("Invalid preference")
         if "hotkey" in values:
             from .hotkey import parse_hotkey
             parse_hotkey(values["hotkey"])
+        if 'speech_backend' in values and values['speech_backend'] not in {'sapi', 'kokoro', 'auto'}:
+            raise ValueError('Choose sapi, kokoro, or auto')
+        if any(key.startswith('speech_') for key in values):
+            await runtime.voice.stop_speaking()
+            await runtime.voice._close_speakers()
         for key, value in values.items():
             setattr(runtime.config, key, value)
         runtime.config.save()

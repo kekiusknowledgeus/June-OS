@@ -1,80 +1,94 @@
-"""Persistent offline Kokoro voice worker running in Python 3.12.
-
-Model weights load once. Replies are synthesized in short chunks so playback
-begins before the whole reply has been generated.
-"""
+"""Persistent isolated Kokoro worker. JSON lines in/out; audio stays in memory."""
 import io
 import json
-from pathlib import Path
 import re
 import sys
+import threading
 import time
-import winsound
-
-import soundfile as sf
-from kokoro_onnx import Kokoro
 
 
-def emit(data):
-    print(json.dumps(data, ensure_ascii=False), flush=True)
+def chunks(text, limit=180):
+    """Bound first synthesis even when the response has no punctuation."""
+    text = text.strip()
+    while text:
+        boundary = re.search(r'[.!?;]\s', text[:limit + 1])
+        end = boundary.end() if boundary else min(len(text), limit)
+        if not boundary and end < len(text):
+            space = text.rfind(' ', 0, end)
+            if space > 0:
+                end = space
+        yield text[:end].strip()
+        text = text[end:].strip()
 
 
-def speech_chunks(text, max_chars=120):
-    """Prefer natural sentence boundaries while keeping first audio short."""
-    text = re.sub(r"\s+", " ", text).strip()
-    current = []
-    length = 0
-    for word in text.split():
-        added = len(word) + (1 if current else 0)
-        if current and length + added > max_chars:
-            yield " ".join(current)
-            current, length = [], 0
-        current.append(word)
-        length += len(word) + (1 if len(current) > 1 else 0)
-        if length >= 55 and word.endswith((".", "!", "?", ";", ":")):
-            yield " ".join(current)
-            current, length = [], 0
-    if current:
-        yield " ".join(current)
+def load_engine(model, voices, threads=2):
+    import onnxruntime as ort
+    from kokoro_onnx import Kokoro
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = max(1, min(8, threads))
+    options.inter_op_num_threads = 1
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.add_session_config_entry('session.intra_op.allow_spinning', '0')
+    session = ort.InferenceSession(model, sess_options=options, providers=['CPUExecutionProvider'])
+    return Kokoro.from_session(session, voices)
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: kokoro_speak.py MODEL.onnx VOICES.bin")
-    model, voices = (Path(p) for p in sys.argv[1:])
-    if not model.is_file() or not voices.is_file():
-        raise SystemExit("Kokoro model files are missing")
+    import winsound
+    import soundfile as sf
+    if len(sys.argv) not in {3, 4}:
+        raise SystemExit('Usage: kokoro_speak.py MODEL VOICES [THREADS]')
+    sys.stdin.reconfigure(encoding='utf-8')
+    sys.stdout.reconfigure(encoding='utf-8')
+    engine = load_engine(*sys.argv[1:3], int(sys.argv[3]) if len(sys.argv) == 4 else 2)
+    condition = threading.Condition()
+    state = {'generation': 0, 'request': None, 'closed': False}
 
-    tts = Kokoro(str(model), str(voices))
-    emit({"status": "ready"})
+    def emit(event):
+        print(json.dumps(event), flush=True)
 
-    for line in sys.stdin:
-        try:
+    def run():
+        while True:
+            with condition:
+                condition.wait_for(lambda: state['request'] is not None or state['closed'])
+                if state['closed']:
+                    return
+                request = state['request']
+                state['request'] = None
+                generation = state['generation']
+            start = time.monotonic()
+            try:
+                for i, chunk in enumerate(chunks(request['text'][:8000])):
+                    if state['generation'] != generation:
+                        break
+                    samples, rate = engine.create(chunk, voice='af_heart', speed=1.0, lang='en-us')
+                    buffer = io.BytesIO()
+                    sf.write(buffer, samples, rate, format='WAV', subtype='PCM_16')
+                    if state['generation'] != generation:
+                        break
+                    if i == 0:
+                        emit({'id': request['id'], 'first_audio_ms': round((time.monotonic() - start) * 1000)})
+                    winsound.PlaySound(buffer.getvalue(), winsound.SND_MEMORY)
+                emit({'id': request['id'], 'done': True})
+            except Exception:
+                emit({'id': request['id'], 'error': 'Kokoro synthesis or playback failed'})
+
+    threading.Thread(target=run, daemon=True).start()
+    emit({'ready': True})
+    try:
+        for line in sys.stdin:
             request = json.loads(line)
-            if request.get("command") != "speak":
-                raise ValueError("Expected speak command")
-            text = request.get("text", "")
-            if not isinstance(text, str):
-                raise ValueError("Text must be a string")
-            start = time.perf_counter()
-            first_audio = None
-            parts = 0
-            for chunk in speech_chunks(text[:1500]):
-                samples, sample_rate = tts.create(
-                    chunk, voice="af_heart", speed=1.0, lang="en-us"
-                )
-                output = io.BytesIO()
-                sf.write(output, samples, sample_rate, format="WAV")
-                if first_audio is None:
-                    first_audio = round(time.perf_counter() - start, 2)
-                winsound.PlaySound(output.getvalue(), winsound.SND_MEMORY)
-                parts += 1
-            emit({"status": "done", "chunks": parts,
-                  "first_audio_seconds": first_audio,
-                  "total_seconds": round(time.perf_counter() - start, 2)})
-        except Exception as exc:
-            emit({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
+            with condition:
+                state['generation'] += 1
+                state['request'] = request if request.get('command') == 'speak' else None
+                winsound.PlaySound(None, 0)
+                condition.notify()
+    finally:
+        with condition:
+            state['closed'] = True
+            condition.notify()
+        winsound.PlaySound(None, 0)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

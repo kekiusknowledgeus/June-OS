@@ -157,6 +157,10 @@ class Runtime:
         if shutdown_kokoro is not None:
             await shutdown_kokoro()
         await self.browser.close()
+        self.personal_browser.bridge.cancel_pending()
+        close_brain = getattr(self.brain, 'close', None)
+        if close_brain:
+            await close_brain()
         self.current.persist()
         self.timeline.add("runtime_stopped", "June stopped")
         self.store.close()
@@ -497,7 +501,7 @@ class Runtime:
                     break
                 except (TimeoutError, ConnectionError, httpx.TransportError):
                     if attempt:
-                        raise
+                        raise BrainUnavailable('Inference unavailable after two attempts; task paused with progress saved.') from None
                     await asyncio.sleep(.5)
             if decision.text:
                 self.store.put("job", {"progress": self.vault.redact(decision.text)}, id)
@@ -511,15 +515,32 @@ class Runtime:
                     context.append({"role": "user", "content": "Host verification gate: " + issue})
                     continue
                 return decision.text or "No response returned by provider."
-            context.extend(decision.raw)
             if len(decision.calls) > 8:
                 raise RuntimeError("Provider exceeded per-step tool budget")
+            ids = [call.get('id') for call in decision.calls]
+            if any(not isinstance(cid, str) or not cid for cid in ids) or len(set(ids)) != len(ids):
+                raise RuntimeError('Provider returned missing or duplicate tool call IDs')
+            # Canonical history also supports adapters that return calls without raw.
+            context.extend(decision.raw or [{'type': 'function_call', 'call_id': c['id'],
+                            'name': c['name'], 'arguments': json.dumps(c['arguments'])}
+                           for c in decision.calls])
+            failed = False
             for call in decision.calls:
+                if failed:
+                    context.append({'type': 'function_call_output', 'call_id': call['id'],
+                                    'output': json.dumps({'status': 'skipped', 'error': 'Earlier tool failed; replan using its result'})})
+                    continue
                 digest = action_digest(call["name"], call["arguments"])
                 seen[digest] = seen.get(digest, 0) + 1
-                if seen[digest] > 2:
+                observation = call['name'].replace('__', '.') in {
+                    'screen.capture', 'windows.observe', 'file.read', 'file.list',
+                    'browser.personal.active_tab', 'browser.personal.read', 'browser.personal.list_tabs',
+                    'git.inspect', 'project.inspect',
+                }
+                if seen[digest] > 2 and not observation:
                     raise RuntimeError("Repeated identical action stopped; replan or revise request")
                 result = await self.execute(id, call["name"], call["arguments"])
+                failed = result['status'] != 'success'
                 self.workflows[id].observe(call["name"].replace("__", "."), call["arguments"], result)
                 output = self.vault.redact(result)[:16000]
                 context.append({"type": "function_call_output", "call_id": call["id"], "output": output})
@@ -528,6 +549,9 @@ class Runtime:
         raise RuntimeError("Agent step budget reached; review progress before continuing")
 
     async def infer(self, id, context):
+        check_available = getattr(self.brain, 'check_available', None)
+        if check_available:
+            check_available()
         today = datetime.now(ZoneInfo(self.config.timezone)).strftime("%Y-%m-%d")
         usage = self.store.get("usage", today) or {"calls": 0}
         if self.brain.external and usage["calls"] >= self.config.provider_daily_calls:
@@ -553,7 +577,7 @@ class Runtime:
         risk = None
         permission = {}
         try:
-            tool = self.registry.get(name)
+            tool = self.registry.validate(name, args)
             name = tool.name
             # Bind relative paths to the current project BEFORE the approval digest.
             selected = self.current.project()
@@ -725,6 +749,7 @@ class Runtime:
         if self.config.privacy:
             self.config.voice_enabled = self.config.screen_enabled = self.config.camera_enabled = False
             await self.cancel_all()
+            self.personal_browser.bridge.cancel_pending()
             await self.voice.stop()
             await self.browser.close()
         elif not self.config.voice_enabled:
@@ -759,6 +784,8 @@ class Runtime:
             "speech_input_device": self.config.speech_input_device or "Windows default",
             "speech_output_device": self.config.speech_output_device or "Windows default",
             "speech_voice": self.config.speech_voice or "Windows default",
+            "speech_backend": self.config.speech_backend,
+            "speech_first_audio_ms": self.voice.first_audio_ms,
             "brain": getattr(self.brain, "status", "configured_unverified") if configured else "not_configured",
             "database": "ok" if self.store.list("task", 1) is not None else "error",
             "voice": self.voice.state, "voice_error": self.voice.error,
