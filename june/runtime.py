@@ -11,6 +11,7 @@ from pathlib import Path
 from .automation import EventBus, Notifications, ProactiveEngine, Scheduler, Watcher
 from .brain import OpenAIBrain, LocalJuneBrain
 from .v0_brain import JuneV0Brain
+from .groq_brain import GroqBrain
 from .config import Config
 from .integrations import Integrations
 from .memory import Memory
