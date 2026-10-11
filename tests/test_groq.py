@@ -75,3 +75,18 @@ async def test_streamed_text_and_tool_call(tmp_path, monkeypatch):
     assert d.text == "Hello" and captured == ["Hello"]
     assert d.calls == [{"id": "call_1", "name": "file.read", "arguments": {"path": "notes.txt"}}]
     assert d.raw[0]["type"] == "function_call"
+
+
+def test_task_based_tool_selection(tmp_path):
+    brain = GroqBrain(Config.load(tmp_path), FakeVault())
+    tools = [
+        {"type": "function", "name": "file__read"},
+        {"type": "function", "name": "file__edit"},
+        {"type": "function", "name": "app__open"},
+        {"type": "function", "name": "web__search"},
+    ]
+    assert brain._select_tools([{"role": "user", "content": "Hello June, introduce yourself"}], tools) == []
+    coding = brain._select_tools([{"role": "user", "content": "Fix my Python code"}], tools)
+    assert {t["name"] for t in coding} == {"file__read", "file__edit"}
+    desktop = brain._select_tools([{"role": "user", "content": "Open Notepad"}], tools)
+    assert {t["name"] for t in desktop} == {"app__open"}
