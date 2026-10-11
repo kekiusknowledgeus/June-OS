@@ -153,7 +153,9 @@ class Runtime:
             await asyncio.gather(self.background, return_exceptions=True)
         await self.cancel_all()
         await self.voice.stop()
-        await self.voice.shutdown_kokoro()
+        shutdown_kokoro = getattr(self.voice, "shutdown_kokoro", None)
+        if shutdown_kokoro is not None:
+            await shutdown_kokoro()
         await self.browser.close()
         self.current.persist()
         self.timeline.add("runtime_stopped", "June stopped")
