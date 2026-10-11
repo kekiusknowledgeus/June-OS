@@ -9,6 +9,7 @@ class Config:
     root: Path = field(default_factory=lambda: Path(os.environ.get("JUNE_ROOT", "D:/June")))
     provider: str = "june_v0"
     model: str = "gpt-4.1-mini"
+    groq_model: str = "qwen/qwen3.8-27b"
     provider_daily_calls: int = 150
     hotkey: str = "Ctrl+Space"
     orb_enabled: bool = True
