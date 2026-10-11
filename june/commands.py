@@ -29,10 +29,29 @@ class LocalCommands:
             r.timeline.add('local_browser_command','Personal browser: '+browser_route['resolution'],r.current.value('current_project'),job,telemetry)
             message='Search opened in your personal browser.' if browser_route['resolution'] in {'search','search_fallback'} else 'Opened in your personal browser.'
             return self.result(result,message)
+        if re.fullmatch(r'(?:(?:list|show)(?: me)?(?: (?:my|the|all))?(?: open| browser)? tabs|what tabs(?: are open)?|open tabs)', low):
+            result = await r.execute(job, 'browser.personal.list_tabs', {})
+            if result['status'] != 'success':
+                return self.result(result, '')
+            tabs = result['result']
+            if isinstance(tabs, dict):
+                tabs = tabs.get('tabs', [])
+            if not isinstance(tabs, list):
+                return 'Browser Bridge returned an unexpected tab listing format.'
+            if not tabs:
+                return 'Browser Bridge reported no accessible tabs.'
+            return 'Open browser tabs:\n' + '\n'.join(
+                f"{i}. {tab.get('title') or '(untitled)'}"
+                for i, tab in enumerate(tabs[:30], 1)
+                if isinstance(tab, dict)
+            )
         if low in {'use this tab','read this tab','read current page','what is the current page title'}:
             result=await r.execute(job,'browser.personal.active_tab',{})
             if result['status']!='success': return self.result(result,'')
             tab=result['result'];r.current.set('personal_browser_tab',tab,'browser bridge observation')
+            if low in {'read this tab', 'read current page'}:
+                result = await r.execute(job, 'browser.personal.read', {'tab': tab['tab']})
+                return result['result'].get('text', '') if result['status'] == 'success' else self.result(result, '')
             return 'Using your browser tab: '+tab.get('title','')+' — '+tab.get('url','')
         if low in {'pause the video','play the video'}:
             active=await r.execute(job,'browser.personal.active_tab',{})
@@ -68,7 +87,7 @@ class LocalCommands:
             return f"Brain: {h['provider']} ({h['brain']}). Memory: online. Project: {project['name'] if project else 'not established'}. Voice: {h['voice']}. Vision: {'enabled' if h['screen_enabled'] else 'off'}. Automation: {'paused' if h['automation_paused'] else 'active'}. Running jobs: {max(0, h['active_jobs'] - 1)}."
         if low in {"show me your brain", "show your brain", "open neural explorer"}:
             await r.request_ui("brain")
-            return "Opening the Brain dashboard. It shows June's working context and operational state; Gemini's model internals are unavailable."
+            return "Opening the Brain dashboard. It shows June's working context and operational state; hosted model internals are unavailable."
         if low in {"what needs my attention", "what should i work on today", "what's unfinished", "show tasks", "what are my tasks"}:
             return await self.attention()
         if low in {"continue where i left off", "continue what i was doing last night", "what was i working on", "where did i stop", "continue previous work"}:

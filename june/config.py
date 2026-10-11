@@ -2,16 +2,16 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 import json
 import os
+import math
 
 
 @dataclass
 class Config:
-    root: Path = field(default_factory=lambda: Path(os.environ.get("JUNE_ROOT", "D:/June")))
-    provider: str = "gemini"
+    root: Path = field(default_factory=lambda: Path(os.environ.get("JUNE_ROOT", Path(__file__).resolve().parents[1])))
+    provider: str = "june_v0"
     model: str = "gpt-4.1-mini"
-    gemini_model: str = "gemini-2.5-flash"
+    groq_model: str = "qwen/qwen3.8-27b"
     provider_daily_calls: int = 150
-    provider_min_interval: float = 1.0
     hotkey: str = "Ctrl+Space"
     orb_enabled: bool = True
     orb_size: int = 112
@@ -24,6 +24,9 @@ class Config:
     speech_input_device: str = ""
     speech_output_device: str = ""
     speech_voice: str = ""
+    speech_backend: str = "sapi"
+    kokoro_threads: int = 2
+    kokoro_first_audio_timeout: float = 8.0
     local_url: str = "http://127.0.0.1:11434/v1"
     local_model: str = ""
     timezone: str = "Asia/Calcutta"
@@ -56,11 +59,26 @@ class Config:
 
     @classmethod
     def load(cls, root=None):
-        base = Path(root or os.environ.get("JUNE_ROOT", "D:/June")).resolve()
+        base = Path(root or os.environ.get("JUNE_ROOT", Path(__file__).resolve().parents[1])).resolve()
         path = base / "config.json"
         data = json.loads(path.read_text("utf-8")) if path.exists() else {}
         data.pop("root", None)
+        # Old installations may still have hosted-provider settings on disk.
+        # Migrate them to June V0 and persist that change without touching secrets.
+        changed = data.get("provider") == "gemini"
+        if changed:
+            data["provider"] = "june_v0"
+        for legacy_key in ("gemini_model", "provider_min_interval"):
+            if legacy_key in data:
+                data.pop(legacy_key)
+                changed = True
         config = cls(root=base, **data)
+        if config.speech_backend not in {'sapi', 'kokoro', 'auto'}:
+            raise ValueError('Invalid speech backend')
+        if type(config.kokoro_threads) is not int or not 1 <= config.kokoro_threads <= 8:
+            raise ValueError('Kokoro threads must be 1–8')
+        if not isinstance(config.kokoro_first_audio_timeout, (int, float)) or not math.isfinite(config.kokoro_first_audio_timeout) or not .1 <= config.kokoro_first_audio_timeout <= 60:
+            raise ValueError('Kokoro first-audio deadline must be 0.1–60 seconds')
         if not config.allowed_roots:
             config.allowed_roots = [str(base)]
         if 'allowed_workspace_roots' not in data:
@@ -78,6 +96,8 @@ class Config:
             (base / "models/june" / folder).mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(base / ".cache/browsers"))
         os.environ.setdefault("HF_HOME", str(base / ".cache/huggingface"))
+        if changed and path.exists():
+            config.save()
         return config
 
     def save(self):

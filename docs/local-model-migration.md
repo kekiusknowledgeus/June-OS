@@ -1,8 +1,20 @@
-# Removing external inference
+# Native June V0 and optional local inference
 
-June's identity, memory, tasks, events, tools, permissions and interfaces are host-owned. Gemini is the current implementation of `JuneBrain`; OpenAI remains optional. Requests use `store: false`, which is not a promise that no provider-side retention policy applies. See the selected provider's data policy before sending sensitive content.
+June V0 is June OS's **default AI brain**. It loads an independently trained
+10.75-million-parameter character-level Transformer from
+`models/june/checkpoints/june_v0_10m.pt`. The model was trained on Tiny
+Shakespeare and is an experimental text generator—not a conversational,
+tool-using assistant. It cannot reliably understand requests or analyze images.
 
-To use an already installed local model server, stop June and edit `config.json`:
+See [June V0 setup](june-v0.md) for checkpoint placement, PyTorch installation,
+and local CPU generation. The default backend needs **no third-party AI API**.
+
+June's identity, memory, tasks, events, tools, permissions, and interfaces are
+host-owned. This remains true even when the native brain cannot follow
+instructions. Gemini support was removed.
+
+For a separately installed model with sufficient tool-use capabilities, the
+existing optional OpenAI-compatible local-server adapter can be enabled with:
 
 ```json
 {
@@ -12,12 +24,16 @@ To use an already installed local model server, stop June and edit `config.json`
 }
 ```
 
-Preserve the other config fields. The endpoint must be loopback HTTP and implement OpenAI-compatible `/chat/completions` tool calling. Install a model with suitable tool-use/context capabilities using your chosen local inference runtime, then restart June and test read-only tools before modifications. Image analysis also requires multimodal support. The machine's model/GPU capacity has not been benchmarked and no model weights have been downloaded.
+Preserve the other local config fields. The endpoint must be loopback HTTP and
+implement `/chat/completions`. Do **not** point this adapter at June V0's raw
+`.pt` checkpoint: it is not a compatible chat server and cannot reliably emit
+structured tool calls. Switching providers does not change the host's permission
+policy or migrate memory records.
 
-`LocalJuneBrain` translates provider-independent tool calls/results and images into the compatible chat format. A future native June model can directly implement the abstract brain contract, avoiding even that wire-format compatibility. It must preserve tool-call IDs, return structured decisions, support bounded cancellation/timeouts, and never take over host permission decisions.
+Speech and durable memory run locally independently of inference. Research and
+external services may still require networking when requested. Never assume
+the native model has image-understanding or tool abilities simply because the
+host application has those integrations.
 
-Speech currently runs locally through Windows. Memory's LSA/concept retrieval is local. Replace either independently with June models through their provider interfaces. Research and external services remain optional network tools; the local API, records, scheduling and UI do not require the internet.
-
-Gemini 2.5 Flash passed the live transport, coding and research checks. The optional OpenAI adapter's earlier test returned `credit_balance_exhausted`. Switching providers does not migrate local records or change the host permission policy.
-
-`models/june/` contains tokenizer, config, checkpoints, weights, training and telemetry directories as empty future integration locations. `NeuralInspector` defines architecture/layers/parameters/tensors/tokenization/logits/probabilities/attention/activations/training/gradients and runtime metrics. Internal inspection is unavailable for hosted Gemini and for a compatible local endpoint until a real telemetry adapter is connected; a local URL alone never produces fabricated model internals.
+`models/june/` holds checkpoints and future training artifacts outside Git.
+`NeuralInspector` does not fabricate unavailable neural internals.

@@ -1,0 +1,12 @@
+.venv*/
+.cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.env*
+config.json
+data/
+models/
+workspace/
+*.wav
+test-results.txt

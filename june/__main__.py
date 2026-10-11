@@ -8,14 +8,23 @@ from .config import Config
 
 def main():
     parser = argparse.ArgumentParser(description="June personal AI operating layer")
-    parser.add_argument("command", nargs="?", choices=["desktop", "serve", "chat", "doctor", "dashboard", "vault"], default="desktop")
+    parser.add_argument("command", nargs="?", choices=["desktop", "serve", "chat", "doctor", "dashboard", "vault", "v0"], default="desktop")
     parser.add_argument("--root", default=None)
     parser.add_argument("--name", help="Credential name for vault command")
     parser.add_argument("--minimized", action="store_true", help="Start in the tray without a large window")
+    parser.add_argument("--prompt", default="ROMEO:\\n", help="V0 text prompt")
+    parser.add_argument("--tokens", type=int, default=80, help="V0 generated characters (1-500)")
     args = parser.parse_args()
     config = Config.load(args.root)
     if args.minimized:
         config.start_minimized = True
+    if args.command == "v0":
+        from .v0_brain import JuneV0Brain
+        try:
+            print(JuneV0Brain(config).sample(args.prompt, args.tokens))
+        except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
+            sys.exit(str(exc))
+        return
     if args.command == "vault":
         from getpass import getpass
         from .security import Vault

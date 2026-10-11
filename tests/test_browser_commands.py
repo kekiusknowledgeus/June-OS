@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 from june.browser_commands import resolve_browser_command
 from june.config import Config
-from june.gemini import GeminiBrain
+from june.v0_brain import JuneV0Brain
 from june.runtime import Runtime
 
 
@@ -47,11 +47,11 @@ def test_rejects_unsafe_or_malformed_urls_locally(command):
     with pytest.raises(ValueError): resolve_browser_command(command)
 
 
-async def test_all_commands_through_jobs_with_gemini_disabled(tmp_path,monkeypatch):
-    config=Config.load(tmp_path);config.owner_mode=True;config.provider='gemini'
-    # A real Gemini adapter exists, but every possible inference attempt fails the test.
-    provider=AsyncMock(side_effect=AssertionError('Gemini must not be called'))
-    monkeypatch.setattr(GeminiBrain,'respond_stream',provider)
+async def test_all_commands_through_jobs_without_model_inference(tmp_path,monkeypatch):
+    config=Config.load(tmp_path);config.owner_mode=True;config.provider='june_v0'
+    # Browser commands must use the local dispatcher, not model inference.
+    provider=AsyncMock(side_effect=AssertionError('June V0 must not be called for this command'))
+    monkeypatch.setattr(JuneV0Brain,'respond_stream',provider)
     opened=[]
     monkeypatch.setattr('june.personal_browser.webbrowser.open_new_tab',lambda url:opened.append(url) or True)
     r=Runtime(config)
@@ -75,8 +75,8 @@ async def test_all_commands_through_jobs_with_gemini_disabled(tmp_path,monkeypat
 
 async def test_failure_and_privacy_do_not_fall_through_to_provider(tmp_path,monkeypatch):
     config=Config.load(tmp_path);config.owner_mode=True
-    provider=AsyncMock(side_effect=AssertionError('Unexpected Gemini call'))
-    monkeypatch.setattr(GeminiBrain,'respond_stream',provider)
+    provider=AsyncMock(side_effect=AssertionError('Unexpected June V0 model inference'))
+    monkeypatch.setattr(JuneV0Brain,'respond_stream',provider)
     monkeypatch.setattr('june.personal_browser.webbrowser.open_new_tab',lambda url:False)
     r=Runtime(config)
     try:

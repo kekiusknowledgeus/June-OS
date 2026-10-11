@@ -1,4 +1,38 @@
-# Validation — 2026-10-03
+# Validation
+
+## Current development pass — 2026-10-11
+
+Baseline: 110 Python tests passed. The earlier historical results below were
+not rerun against live personal apps or accounts in this pass.
+
+Final verification commands:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+node --test tests/browser_bridge.test.cjs
+node --check extensions/june-browser-bridge/background.js
+node --check june/web/settings.js
+.\.venv\Scripts\python.exe -m compileall -q june tests
+git diff --check
+```
+
+Final result: **146 Python tests passed** (74.75 seconds), **5 Node tests passed**.
+Python compilation, extension/settings JavaScript syntax checks and Git whitespace
+checks passed. One upstream Starlette/httpx TestClient deprecation warning remains.
+Changes are staged on `feature/june-v0-experimental-brain`; committing is pending
+the owner's Git author name/email because this checkout has no configured identity.
+New tests
+cover streamed Groq text/tools, partial-response refusal, cooldowns, tool-history
+grouping, mixed capability selection, failed batch handling, bridge claim and
+ticket lifecycle, speech deadlines/privacy, routing, preference persistence and
+the desktop verification gate. Tests block external sockets, isolate credentials
+and use synthetic desktop/browser observations.
+
+Silent Kokoro CPU measurements and remaining attended acceptance checks are in
+[the audit](development-audit-2026-10-11.md). No live Groq request, real browser
+action or microphone recording was performed.
+
+## Historical validation — 2026-10-03 (not revalidated here)
 
 This phase continued the existing repository. Latest completed full regression run: **107 passed**; one upstream Starlette/httpx TestClient deprecation warning. Python compilation passes. No numerical “80% complete” certification is claimed.
 

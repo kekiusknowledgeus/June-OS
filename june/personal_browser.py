@@ -24,6 +24,7 @@ def navigation_url(url, runtime_port=8765):
 class BrowserBridge:
     def __init__(self,runtime):
         self.r=runtime;self.queue=asyncio.Queue(maxsize=50);self.pending={};self.last_seen=0
+        self.claimed = set()
         self.pair_code=None;self.pair_expires=0
         self.path=runtime.config.root/'data/browser-bridge.json'
         self.credentials=json.loads(self.path.read_text()) if self.path.exists() else {}
@@ -53,11 +54,30 @@ class BrowserBridge:
         id=secrets.token_urlsafe(18);future=asyncio.get_running_loop().create_future()
         self.pending[id]=future
         try:
-            self.queue.put_nowait({'id':id,'operation':operation,'arguments':args or {},'expires':time.time()+30})
+            try:
+                self.queue.put_nowait({'id':id,'operation':operation,'arguments':args or {},'expires':time.time()+30})
+            except asyncio.QueueFull:
+                raise RuntimeError('Browser Bridge queue is full; wait for pending requests') from None
             result=await asyncio.wait_for(future,30)
             if result.get('error'): raise RuntimeError(result['error'])
             return result.get('result')
-        finally: self.pending.pop(id,None)
+        finally:
+            self.pending.pop(id,None)
+            self.claimed.discard(id)
+
+    def claim(self, id):
+        future = self.pending.get(id)
+        if self.r.config.privacy or not future or future.done() or id in self.claimed:
+            raise PermissionError('Browser request cancelled, already claimed, or privacy enabled')
+        self.claimed.add(id)
+
+    def cancel_pending(self):
+        for future in self.pending.values():
+            if not future.done():
+                future.cancel()
+        self.claimed.clear()
+        while not self.queue.empty():
+            self.queue.get_nowait()
 
     async def poll(self):
         self.last_seen=time.time()
@@ -70,7 +90,7 @@ class BrowserBridge:
 
     def complete(self,id,result):
         future=self.pending.get(id)
-        if not future or future.done(): raise ValueError('Unknown or expired browser request')
+        if not future or future.done() or id not in self.claimed: raise ValueError('Unknown, unclaimed, or expired browser request')
         future.set_result(result)
 
 
