@@ -4,6 +4,7 @@ import json
 import httpx
 
 from .brain import Decision, JuneBrain
+from .errors import BrainUnavailable
 
 
 class GroqBrain(JuneBrain):
@@ -177,6 +178,20 @@ class GroqBrain(JuneBrain):
                 ) as response:
                     if response.status_code >= 400:
                         self.status = "error:http_" + str(response.status_code)
+                        if response.status_code == 429:
+                            # Do not keep retrying a rate-limited provider. Expose
+                            # only timing/limit metadata, never credentials or prompts.
+                            retry_header = response.headers.get("retry-after", "")
+                            try:
+                                seconds = max(0, min(86400, int(float(retry_header))))
+                            except (TypeError, ValueError, OverflowError):
+                                seconds = 0
+                            wait = f" Retry after approximately {seconds} seconds." if seconds else " Check your rate-limit reset time."
+                            raise BrainUnavailable(
+                                "Groq rate limit reached (HTTP 429)." + wait
+                                + " June has paused this cloud task; no action was executed.",
+                                retry_after=seconds,
+                            )
                         if response.status_code == 413:
                             size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                             raise RuntimeError(
