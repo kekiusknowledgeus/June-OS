@@ -44,7 +44,7 @@ class Runtime:
         self.policy = Policy(self.config)
         self.trust = Trust(self)
         self.approval_arguments = {}
-        providers = {"openai": lambda: OpenAIBrain(self.config, self.vault), "local": lambda: LocalJuneBrain(self.config), "june_v0": lambda: JuneV0Brain(self.config)}
+        providers = {"openai": lambda: OpenAIBrain(self.config, self.vault), "local": lambda: LocalJuneBrain(self.config), "june_v0": lambda: JuneV0Brain(self.config), "groq": lambda: GroqBrain(self.config, self.vault)}
         if self.config.provider not in providers:
             raise ValueError("Unknown brain provider")
         self.brain = brain or providers[self.config.provider]()
