@@ -29,6 +29,23 @@ class LocalCommands:
             r.timeline.add('local_browser_command','Personal browser: '+browser_route['resolution'],r.current.value('current_project'),job,telemetry)
             message='Search opened in your personal browser.' if browser_route['resolution'] in {'search','search_fallback'} else 'Opened in your personal browser.'
             return self.result(result,message)
+        if (('tab' in low and any(k in low for k in ('list', 'open', 'show', 'what')))
+                and not any(k in low for k in ('close', 'change', 'switch', 'activate'))):
+            result = await r.execute(job, 'browser.personal.list_tabs', {})
+            if result['status'] != 'success':
+                return self.result(result, '')
+            tabs = result['result']
+            if isinstance(tabs, dict):
+                tabs = tabs.get('tabs', [])
+            if not isinstance(tabs, list):
+                return 'Browser Bridge returned an unexpected tab listing format.'
+            if not tabs:
+                return 'Browser Bridge reported no accessible tabs.'
+            return 'Open browser tabs:\\n' + '\\n'.join(
+                f"{i}. {tab.get('title') or '(untitled)'}"
+                for i, tab in enumerate(tabs[:30], 1)
+                if isinstance(tab, dict)
+            )
         if low in {'use this tab','read this tab','read current page','what is the current page title'}:
             result=await r.execute(job,'browser.personal.active_tab',{})
             if result['status']!='success': return self.result(result,'')
