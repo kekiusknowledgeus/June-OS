@@ -739,6 +739,9 @@ class Runtime:
         if self.config.provider == "openai":
             configured = bool(self.vault.get("OPENAI_API_KEY"))
             model_name = self.config.model
+        elif self.config.provider == "groq":
+            configured = bool(self.vault.get("GROQ_API_KEY"))
+            model_name = self.config.groq_model
         elif self.config.provider == "june_v0":
             configured = (self.config.root / "models" / "june" / "checkpoints" / "june_v0_10m.pt").is_file()
             model_name = "june_v0_10m"
